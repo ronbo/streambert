@@ -392,10 +392,6 @@ export default function TVPage({
     () => sourceProgressViaFrames(playerSource),
     [playerSource],
   );
-  const currentSourceLabel = useMemo(
-    () => PLAYER_SOURCES.find((s) => s.id === playerSource)?.label ?? "Source",
-    [playerSource],
-  );
   const [dubMode, setDubMode] = useState(
     () => storage.get("allmangaDubMode") || "sub",
   );
@@ -1099,64 +1095,6 @@ export default function TVPage({
   ]);
 
   // ── AniSkip: auto-skip or show manual prompt ─────────────────
-  useEffect(() => {
-    if (
-      introSkipMode === "off" ||
-      !playing ||
-      !skipTimings ||
-      playerSource !== "allmanga"
-    ) {
-      setSkipPrompt(null);
-      return;
-    }
-
-    const interval = setInterval(async () => {
-      const wv = webviewRef.current;
-      if (!wv) return;
-      let ct;
-      try {
-        ct = await wv.executeJavaScript(
-          `(() => { const v = document.querySelector('video'); return v ? v.currentTime : null; })()`,
-        );
-      } catch {
-        return;
-      }
-      if (ct == null) return;
-
-      const { intro, outro } = skipTimings;
-
-      // Check which segment we're in
-      const inIntro = intro && ct >= intro.startTime && ct < intro.endTime - 1;
-      const inOutro = outro && ct >= outro.startTime && ct < outro.endTime - 1;
-      const activeSegment = inIntro ? "intro" : inOutro ? "outro" : null;
-
-      if (!activeSegment) {
-        setSkipPrompt(null);
-        return;
-      }
-
-      if (introSkipMode === "auto") {
-        setSkipPrompt(null);
-        const rawEnd = skipTimings[activeSegment].endTime;
-        const endTime = Number(rawEnd);
-        if (!Number.isFinite(endTime)) return;
-        try {
-          await wv.executeJavaScript(
-            `(() => { const v = document.querySelector('video'); if (v) v.currentTime = ${endTime}; })()`,
-          );
-        } catch {}
-      } else {
-        // manual, show prompt
-        setSkipPrompt(activeSegment);
-      }
-    }, 1000);
-
-    return () => {
-      clearInterval(interval);
-      setSkipPrompt(null);
-    };
-  }, [playing, skipTimings, playerSource, introSkipMode]);
-
   // ── AniSkip: manual skip handler ─────────────────────────────────────────
   const handleManualSkip = useCallback(async () => {
     if (!skipPrompt || !skipTimings?.[skipPrompt]) return;
@@ -1188,10 +1126,22 @@ export default function TVPage({
     return () => wv.removeEventListener("before-input-event", handler);
   }, [skipPrompt, handleManualSkip]);
 
-  // ── Auto-track progress + auto-watched every 5s ──────────────────────────
+  // Unified progress/skip timing tick for Allmanga and other sources.
+  // Skip detection runs every tick, progress is saved every 5th tick (5s).
   useEffect(() => {
+    const aniSkipActive =
+      introSkipMode !== "off" &&
+      playing &&
+      !!skipTimings &&
+      playerSource === "allmanga";
+
+    if (!aniSkipActive) setSkipPrompt(null);
     if (!playing || !currentProgressKey) return;
+
+    const TICK = aniSkipActive ? 1000 : 5000;
+    let tickCount = 0;
     let interval = null;
+
     const timer = setTimeout(() => {
       interval = setInterval(async () => {
         try {
@@ -1225,6 +1175,37 @@ export default function TVPage({
               })()
             `);
           }
+
+          // ── AniSkip logic: runs every tick (only when aniSkipActive) ────
+          if (aniSkipActive && result?.currentTime != null) {
+            const ct = result.currentTime;
+            const { intro, outro } = skipTimings;
+            const inIntro =
+              intro && ct >= intro.startTime && ct < intro.endTime - 1;
+            const inOutro =
+              outro && ct >= outro.startTime && ct < outro.endTime - 1;
+            const activeSegment = inIntro ? "intro" : inOutro ? "outro" : null;
+            if (!activeSegment) {
+              setSkipPrompt(null);
+            } else if (introSkipMode === "auto") {
+              setSkipPrompt(null);
+              const endTime = Number(skipTimings[activeSegment].endTime);
+              if (Number.isFinite(endTime)) {
+                try {
+                  await wv.executeJavaScript(
+                    `(() => { const v = document.querySelector('video'); if (v) v.currentTime = ${endTime}; })()`,
+                  );
+                } catch {}
+              }
+            } else {
+              setSkipPrompt(activeSegment);
+            }
+          }
+
+          // ── Progress logic: every 5s regardless of tick rate ────────────
+          tickCount++;
+          if (aniSkipActive && tickCount % 5 !== 0) return;
+
           if (result && result.duration > 0) {
             durationRef.current = result.duration;
             const ct = result.currentTime;
@@ -1280,17 +1261,21 @@ export default function TVPage({
             }
           }
         } catch {}
-      }, 5000);
+      }, TICK);
     }, 3000);
+
     return () => {
       clearTimeout(timer);
       clearInterval(interval);
+      setSkipPrompt(null);
     };
   }, [
     playing,
+    skipTimings,
+    playerSource,
+    introSkipMode,
     currentProgressKey,
     watchedThreshold,
-    playerSource,
     progressViaFrames,
   ]);
 
