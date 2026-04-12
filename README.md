@@ -60,7 +60,7 @@ It's saved locally, you only need to do this once.
 
 ### Linux, Manual (.deb / .AppImage / .pacman)
 
-Download the latest `.deb` or `.AppImage` from the [Releases](https://github.com/truelockmc/streambert/releases/latest) page.
+Download the latest `.deb` `.pacman` or `.AppImage` from the [Releases](https://github.com/truelockmc/streambert/releases/latest) page.
 ```bash
 # .deb
 sudo dpkg -i streambert_*.deb
